@@ -249,16 +249,6 @@ if __name__ == '__main__':
         output_folder += f'_{branch}'
     output_folder = Path(base_folder) / output_folder
 
-    # Creating the folder and writing the metadata
-    if not output_folder.exists():
-        output_folder.mkdir()
-
-    with open(output_folder / 'huggingface-metadata.txt', 'w') as f:
-        f.write(f'url: https://huggingface.co/{model}\n')
-        f.write(f'branch: {branch}\n')
-        f.write(
-            f'download date: {str(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))}\n')
-
     # Downloading the files
     print(f"Downloading the model to {output_folder}")
     if args.scrap:
@@ -270,3 +260,14 @@ if __name__ == '__main__':
         os.system(_cmd)
 
         # For example: git clone https://huggingface.co/anon8231489123/vicuna-13b-GPTQ-4bit-128g to desired output folder
+
+
+    # Creating the folder and writing the metadata
+    if not output_folder.exists():
+        output_folder.mkdir()
+
+    with open(output_folder / 'huggingface-metadata.txt', 'w') as f:
+        f.write(f'url: https://huggingface.co/{model}\n')
+        f.write(f'branch: {branch}\n')
+        f.write(
+            f'download date: {str(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))}\n')
