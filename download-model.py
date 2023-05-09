@@ -11,6 +11,7 @@ import base64
 import datetime
 import hashlib
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -21,13 +22,22 @@ from tqdm.contrib.concurrent import thread_map
 
 parser = argparse.ArgumentParser()
 parser.add_argument('MODEL', type=str, default=None, nargs='?')
-parser.add_argument('--branch', type=str, default='main', help='Name of the Git branch to download from.')
-parser.add_argument('--threads', type=int, default=1, help='Number of files to download simultaneously.')
-parser.add_argument('--text-only', action='store_true', help='Only download text files (txt/json).')
-parser.add_argument('--output', type=str, default=None, help='The folder where the model should be saved.')
-parser.add_argument('--clean', action='store_true', help='Does not resume the previous download.')
-parser.add_argument('--check', action='store_true', help='Validates the checksums of model files.')
+parser.add_argument('--branch', type=str, default='main',
+                    help='Name of the Git branch to download from.')
+parser.add_argument('--threads', type=int, default=1,
+                    help='Number of files to download simultaneously.')
+parser.add_argument('--text-only', action='store_true',
+                    help='Only download text files (txt/json).')
+parser.add_argument('--output', type=str, default=None,
+                    help='The folder where the model should be saved.')
+parser.add_argument('--clean', action='store_true',
+                    help='Does not resume the previous download.')
+parser.add_argument('--check', action='store_true',
+                    help='Validates the checksums of model files.')
+parser.add_argument('--scrap', action='store_true',
+                    help='Scraps the repo instead of cloning the files.')
 args = parser.parse_args()
+
 
 def get_file(url, output_folder):
     filename = Path(url.rsplit('/', 1)[1])
@@ -54,12 +64,15 @@ def get_file(url, output_folder):
                 t.update(len(data))
                 f.write(data)
 
+
 def sanitize_branch_name(branch_name):
     pattern = re.compile(r"^[a-zA-Z0-9._-]+$")
     if pattern.match(branch_name):
         return branch_name
     else:
-        raise ValueError("Invalid branch name. Only alphanumeric characters, period, underscore and dash are allowed.")
+        raise ValueError(
+            "Invalid branch name. Only alphanumeric characters, period, underscore and dash are allowed.")
+
 
 def select_model_from_default_options():
     models = {
@@ -74,11 +87,12 @@ def select_model_from_default_options():
         "Pythia-2.8B-deduped": ("EleutherAI", "pythia-2.8b-deduped", "main"),
         "Pythia-1.4B-deduped": ("EleutherAI", "pythia-1.4b-deduped", "main"),
         "Pythia-410M-deduped": ("EleutherAI", "pythia-410m-deduped", "main"),
+        "Vicuna": ("anon8231489123", "vicuna-13b-GPTQ-4bit-128g", "main"),
     }
     choices = {}
 
     print("Select the model that you want to download:\n")
-    for i,name in enumerate(models):
+    for i, name in enumerate(models):
         char = chr(ord('A')+i)
         choices[char] = name
         print(f"{char}) {name}")
@@ -104,12 +118,16 @@ EleutherAI/pythia-1.4b-deduped
         model = f"{arr[0]}/{arr[1]}"
         branch = arr[2]
 
+    print("model:", model)
+    print("branch:", branch)
     return model, branch
+
 
 def get_download_links_from_huggingface(model, branch):
     base = "https://huggingface.co"
-    page = f"/api/models/{model}/tree/{branch}?cursor="
-    cursor = b""
+    # page = f"/{model}/tree/{branch}?cursor="
+    # cursor = b""
+    page = f"/{model}/tree/{branch}"
 
     links = []
     sha256 = []
@@ -120,9 +138,21 @@ def get_download_links_from_huggingface(model, branch):
     has_safetensors = False
     is_lora = False
     while True:
-        content = requests.get(f"{base}{page}{cursor.decode()}").content
+        # content = requests.get(f"{base}{page}{cursor.decode()}").content
+        print(f"{base}{page}")
+        r = requests.get(f"{base}{page}")
+        _content = r.content
+        # DEBUG: dump content
+        with open("content.html", "wb") as f:
+            import os
+            print("pwd", os.getcwd())
+            f.write(_content)
 
-        dict = json.loads(content)
+        # dict = json.loads(content) # BUG: json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+        # dict = json.loads(content.decode())
+        # still the same bug
+        dict = json.loads(_content.decode('utf-8'))
+
         if len(dict) == 0:
             break
 
@@ -142,11 +172,13 @@ def get_download_links_from_huggingface(model, branch):
                 if 'lfs' in dict[i]:
                     sha256.append([fname, dict[i]['lfs']['oid']])
                 if is_text:
-                    links.append(f"https://huggingface.co/{model}/resolve/{branch}/{fname}")
+                    links.append(
+                        f"https://huggingface.co/{model}/resolve/{branch}/{fname}")
                     classifications.append('text')
                     continue
                 if not args.text_only:
-                    links.append(f"https://huggingface.co/{model}/resolve/{branch}/{fname}")
+                    links.append(
+                        f"https://huggingface.co/{model}/resolve/{branch}/{fname}")
                     if is_safetensors:
                         has_safetensors = True
                         classifications.append('safetensors')
@@ -160,7 +192,8 @@ def get_download_links_from_huggingface(model, branch):
                         has_ggml = True
                         classifications.append('ggml')
 
-        cursor = base64.b64encode(f'{{"file_name":"{dict[-1]["path"]}"}}'.encode()) + b':50'
+        cursor = base64.b64encode(
+            f'{{"file_name":"{dict[-1]["path"]}"}}'.encode()) + b':50'
         cursor = base64.b64encode(cursor)
         cursor = cursor.replace(b'=', b'%3D')
 
@@ -172,12 +205,17 @@ def get_download_links_from_huggingface(model, branch):
 
     return links, sha256, is_lora
 
+
 def download_files(file_list, output_folder, num_threads=8):
-    thread_map(lambda url: get_file(url, output_folder), file_list, max_workers=num_threads, disable=True)
+    thread_map(lambda url: get_file(url, output_folder),
+               file_list, max_workers=num_threads, disable=True)
+
 
 if __name__ == '__main__':
     model = args.MODEL
     branch = args.branch
+    print("scrap:", args.scrap, "\n")
+
     if model is None:
         model, branch = select_model_from_default_options()
     else:
@@ -193,7 +231,13 @@ if __name__ == '__main__':
                 print(f"Error: {err_branch}")
                 sys.exit()
 
-    links, sha256, is_lora = get_download_links_from_huggingface(model, branch)
+    if args.scrap:
+        links, sha256, is_lora = get_download_links_from_huggingface(
+            model, branch)
+    else:
+        links = []
+        sha256 = []
+        is_lora = False
 
     if args.output is not None:
         base_folder = args.output
@@ -205,46 +249,24 @@ if __name__ == '__main__':
         output_folder += f'_{branch}'
     output_folder = Path(base_folder) / output_folder
 
-    if args.check:
-        # Validate the checksums
-        validated = True
-        for i in range(len(sha256)):
-            fpath = (output_folder / sha256[i][0])
+    # Creating the folder and writing the metadata
+    if not output_folder.exists():
+        output_folder.mkdir()
 
-            if not fpath.exists():
-                print(f"The following file is missing: {fpath}")
-                validated = False
-                continue
+    with open(output_folder / 'huggingface-metadata.txt', 'w') as f:
+        f.write(f'url: https://huggingface.co/{model}\n')
+        f.write(f'branch: {branch}\n')
+        f.write(
+            f'download date: {str(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))}\n')
 
-            with open(output_folder / sha256[i][0], "rb") as f:
-                bytes = f.read()
-                file_hash = hashlib.sha256(bytes).hexdigest()
-                if file_hash != sha256[i][1]:
-                    print(f'Checksum failed: {sha256[i][0]}  {sha256[i][1]}')
-                    validated = False
-                else:
-                    print(f'Checksum validated: {sha256[i][0]}  {sha256[i][1]}')
-        
-        if validated:
-            print('[+] Validated checksums of all model files!')
-        else:
-            print('[-] Invalid checksums. Rerun download-model.py with the --clean flag.')
-
-    else:
-
-        # Creating the folder and writing the metadata
-        if not output_folder.exists():
-            output_folder.mkdir()
-        with open(output_folder / 'huggingface-metadata.txt', 'w') as f:
-            f.write(f'url: https://huggingface.co/{model}\n')
-            f.write(f'branch: {branch}\n')
-            f.write(f'download date: {str(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))}\n')
-            sha256_str = ''
-            for i in range(len(sha256)):
-                sha256_str += f'    {sha256[i][1]} {sha256[i][0]}\n'
-            if sha256_str != '':
-                f.write(f'sha256sum:\n{sha256_str}')
-
-        # Downloading the files
-        print(f"Downloading the model to {output_folder}")
+    # Downloading the files
+    print(f"Downloading the model to {output_folder}")
+    if args.scrap:
         download_files(links, output_folder, args.threads)
+    else:
+        _cmd = f"git clone https://huggingface.co/{model} {output_folder}"
+        print(
+            f"Cloning the model to {output_folder} using the command: {_cmd}")
+        os.system(_cmd)
+
+        # For example: git clone https://huggingface.co/anon8231489123/vicuna-13b-GPTQ-4bit-128g to desired output folder
